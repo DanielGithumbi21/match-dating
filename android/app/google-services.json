@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "945322319364",
+    "project_id": "pollencontrollers",
+    "storage_bucket": "pollencontrollers.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:945322319364:android:430e7053ca152eb4a25f51",
+        "android_client_info": {
+          "package_name": "com.datingfrontend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "945322319364-qcjtgvb3vmv762ok783co2an46nd1kb2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.datingfrontend",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "945322319364-fajiklk92udctib0o8p4cgfp5la1jqk3.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAn-yLbpQym9EqRO0w7XkRGZYZibfWJAv4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "945322319364-fajiklk92udctib0o8p4cgfp5la1jqk3.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
