@@ -1,64 +1,70 @@
 import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
   ActivityIndicator,
   Alert,
   SafeAreaView,
-  Dimensions
+  Dimensions,
 } from 'react-native';
 import useAuthStore from '../store/auth.store';
 import { auth, GoogleSignin } from '../services/FirebaseConfig';
 import { GoogleSigninButton } from '@react-native-google-signin/google-signin';
 import { Colors } from './themes/color';
 import firestore from '@react-native-firebase/firestore';
-import { useNavigation } from '@react-navigation/native';
+import { CommonActions, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../navigation/types';
 
 const { width } = Dimensions.get('window');
 
 export default function LoginScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<AuthStackParamList>>();
-  const setUser = useAuthStore((state) => state.setUser);
+  const navigation =
+    useNavigation<NativeStackNavigationProp<AuthStackParamList>>();
+  const setUser = useAuthStore(state => state.setUser);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
     if (isLoading) return;
-    
+
     setIsLoading(true);
     try {
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      await GoogleSignin.hasPlayServices({
+        showPlayServicesUpdateDialog: true,
+      });
       const { data } = await GoogleSignin.signIn();
-      
+
       if (!data?.idToken) {
         throw new Error('No ID token received from Google');
       }
 
       const googleCredential = auth.GoogleAuthProvider.credential(data.idToken);
-      const userCredential = await auth().signInWithCredential(googleCredential);
-      
+      const userCredential = await auth().signInWithCredential(
+        googleCredential,
+      );
+
       if (!userCredential.user) {
         throw new Error('Authentication failed');
       }
 
-      const userRef = firestore().collection('users').doc(userCredential.user.uid);
+      const userRef = firestore()
+        .collection('users')
+        .doc(userCredential.user.uid);
       const userDoc = await userRef.get();
-      
+
       if (userDoc.exists()) {
         // ✅ Existing user → load their profile
         const userData = userDoc.data();
-        setUser({ 
-          uid: userCredential.user.uid, 
-          ...userData 
+        setUser({
+          uid: userCredential.user.uid,
+          ...userData,
         });
-        
+
         // Navigate to main app or check if onboarding is complete
         // You might want to check if user has completed onboarding here
         // For now, assuming they go to main app
-        
       } else {
         // 🆕 New user → save basic info, then go to Onboarding
         const newUserData = {
@@ -66,26 +72,35 @@ export default function LoginScreen() {
           email: userCredential.user.email || '',
           photoURL: userCredential.user.photoURL || '',
           createdAt: firestore.FieldValue.serverTimestamp(),
-          onboardingCompleted: false, // Track onboarding status
+          onboardingCompleted: false,
         };
 
         await userRef.set(newUserData);
 
-        setUser({
-          uid: userCredential.user.uid,
-          ...newUserData,
-        });
-
-        // Use replace instead of navigate to prevent going back to login
-        navigation.replace('Onboarding');
+        // Don't set user yet, navigate to onboarding first
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: 'Onboarding',
+                params: {
+                  tempUser: {
+                    uid: userCredential.user.uid,
+                    ...newUserData,
+                  },
+                },
+              },
+            ],
+          }),
+        );
       }
-
     } catch (error) {
       console.error('Google Sign-In error:', error);
       Alert.alert(
         'Sign In Error',
         'There was a problem signing you in. Please try again.',
-        [{ text: 'OK' }]
+        [{ text: 'OK' }],
       );
     } finally {
       setIsLoading(false);
@@ -102,16 +117,17 @@ export default function LoginScreen() {
           </View>
           <Text style={styles.title}>You Match</Text>
           <Text style={styles.subtitle}>
-            Connect with like-minded people and discover meaningful relationships
+            Connect with like-minded people and discover meaningful
+            relationships
           </Text>
         </View>
 
         {/* Sign In Section */}
         <View style={styles.signInSection}>
           <Text style={styles.signInTitle}>Get Started</Text>
-          
+
           {/* Google Sign In Button */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.googleButtonContainer}
             onPress={handleLogin}
             disabled={isLoading}
@@ -151,8 +167,7 @@ export default function LoginScreen() {
         <View style={styles.footer}>
           <Text style={styles.footerText}>
             By continuing, you agree to our{' '}
-            <Text style={styles.linkText}>Terms of Service</Text>
-            {' '}and{' '}
+            <Text style={styles.linkText}>Terms of Service</Text> and{' '}
             <Text style={styles.linkText}>Privacy Policy</Text>
           </Text>
         </View>

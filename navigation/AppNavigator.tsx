@@ -9,14 +9,16 @@ import { RootStackParamList } from './types';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
-  const user = useAuthStore((state) => state.user);
+  const user = useAuthStore(state => state.user);
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           <Stack.Screen name="Auth" component={AuthNavigator} />
         ) : (
-          <Stack.Screen name="Main" component={MainTabs} />
+          <>
+            <Stack.Screen name="Main" component={MainTabs} />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

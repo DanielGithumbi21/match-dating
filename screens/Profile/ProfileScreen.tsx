@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  Image, 
-  Alert, 
-  FlatList, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  Alert,
+  FlatList,
+  TouchableOpacity,
   ScrollView,
   ActivityIndicator,
   Modal,
-  Dimensions, 
+  Dimensions,
   Platform,
-  PermissionsAndroid
+  PermissionsAndroid,
 } from 'react-native';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import firestore from '@react-native-firebase/firestore';
@@ -29,44 +29,79 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { auth } from '../../services/FirebaseConfig';
 
 const { width: screenWidth } = Dimensions.get('window');
-const rewarded = RewardedAd.createForAdRequest(TestIds.REWARDED);
+
+// Create multiple rewarded ads for better loading
+const createRewardedAd = () => RewardedAd.createForAdRequest(TestIds.REWARDED);
+let rewardedAd = createRewardedAd();
+
+// Coin packages for purchase
+const COIN_PACKAGES = [
+  { id: 1, coins: 500, price: 99, popular: false },
+  { id: 2, coins: 1000, price: 150, popular: true },
+  { id: 3, coins: 2500, price: 299, popular: false },
+  { id: 4, coins: 5000, price: 499, popular: false },
+];
 
 export default function ProfileScreen() {
   const user = useAuthStore(state => state.user);
   const logout = useAuthStore(state => state.logout);
   const [photos, setPhotos] = useState<string[]>([]);
   const [coins, setCoins] = useState<number>(0);
-  const [loaded, setLoaded] = useState(false);
+  const [adLoaded, setAdLoaded] = useState(false);
+  const [adLoading, setAdLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [showImageModal, setShowImageModal] = useState(false);
+  const [showCoinModal, setShowCoinModal] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   useEffect(() => {
-    const unsubscribeLoaded = rewarded.addAdEventListener(
-      RewardedAdEventType.LOADED,
-      () => {
-        setLoaded(true);
-      }
-    );
+    let loadedListener;
+    let earnedListener;
 
-    const unsubscribeEarned = rewarded.addAdEventListener(
-      RewardedAdEventType.EARNED_REWARD,
-      async (reward) => {
-        Alert.alert('🎉 Congratulations!', `You earned ${reward.amount} coins!`);
+    const initializeAd = () => {
+      setAdLoading(true);
 
-        if (user?.uid) {
-          await firestore().collection('users').doc(user.uid).update({
-            coins: firestore.FieldValue.increment(reward.amount),
-          });
-        }
-      }
-    );
+      loadedListener = rewardedAd.addAdEventListener(
+        RewardedAdEventType.LOADED,
+        () => {
+          setAdLoaded(true);
+          setAdLoading(false);
+        },
+      );
 
-    rewarded.load();
+      earnedListener = rewardedAd.addAdEventListener(
+        RewardedAdEventType.EARNED_REWARD,
+        async reward => {
+          Alert.alert(
+            '🎉 Congratulations!',
+            `You earned ${reward.amount} coins!`,
+          );
+          if (user?.uid) {
+            await firestore()
+              .collection('users')
+              .doc(user.uid)
+              .update({
+                coins: firestore.FieldValue.increment(reward.amount),
+              });
+          }
+          loadNewAd();
+        },
+      );
+
+      rewardedAd.load();
+    };
+
+    const loadNewAd = () => {
+      rewardedAd = createRewardedAd();
+      initializeAd();
+    };
+
+    initializeAd();
 
     return () => {
-      unsubscribeLoaded();
-      unsubscribeEarned();
+      if (loadedListener) loadedListener();
+      if (earnedListener) earnedListener();
     };
   }, [user?.uid]);
 
@@ -78,7 +113,9 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     if (!user?.uid) return;
-    const unsubscribe = firestore().collection('users').doc(user.uid)
+    const unsubscribe = firestore()
+      .collection('users')
+      .doc(user.uid)
       .onSnapshot(snapshot => {
         const data = snapshot.data();
         if (data?.photos) setPhotos(data.photos);
@@ -86,7 +123,49 @@ export default function ProfileScreen() {
     return unsubscribe;
   }, [user?.uid]);
 
-  // Upload photo to Firebase Storage and save URL to Firestore
+  // Mpesa payment integration
+  const initiateMpesaPayment = async packageInfo => {
+    setProcessingPayment(true);
+
+    try {
+      // This is a placeholder for actual Mpesa integration
+      // You'll need to integrate with your backend API that handles Mpesa payments
+      const response = await fetch('YOUR_BACKEND_API/initiate-mpesa-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: packageInfo.price,
+          phoneNumber: user.phoneNumber, // You'll need to collect this
+          userId: user.uid,
+          coins: packageInfo.coins,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        Alert.alert(
+          '📱 Payment Initiated',
+          `Please check your phone for the Mpesa payment prompt. You'll receive ${packageInfo.coins} coins once payment is confirmed.`,
+          [{ text: 'OK' }],
+        );
+      } else {
+        throw new Error(result.message || 'Payment failed');
+      }
+    } catch (error) {
+      Alert.alert(
+        '❌ Payment Error',
+        'Failed to initiate payment. Please try again.',
+      );
+      console.error('Payment error:', error);
+    } finally {
+      setProcessingPayment(false);
+      setShowCoinModal(false);
+    }
+  };
+
   const uploadAndSavePhoto = async (uri: string) => {
     try {
       setUploading(true);
@@ -94,34 +173,41 @@ export default function ProfileScreen() {
       await ref.putFile(uri);
       const downloadURL = await ref.getDownloadURL();
 
-      await firestore().collection('users').doc(user?.uid).update({
-        photos: firestore.FieldValue.arrayUnion(downloadURL),
-      });
-      
+      await firestore()
+        .collection('users')
+        .doc(user?.uid)
+        .update({
+          photos: firestore.FieldValue.arrayUnion(downloadURL),
+        });
+
       Alert.alert('✅ Success!', 'Photo uploaded successfully!');
     } catch (err) {
       console.error('Upload error:', err);
-      Alert.alert('❌ Upload Failed', 'Could not upload the photo. Please try again.');
+      Alert.alert(
+        '❌ Upload Failed',
+        'Could not upload the photo. Please try again.',
+      );
     } finally {
       setUploading(false);
     }
   };
 
   const handleAddFromGallery = async () => {
-    const result = await launchImageLibrary({ 
-      mediaType: 'photo', 
+    const result = await launchImageLibrary({
+      mediaType: 'photo',
       selectionLimit: 5,
       quality: 0.8,
       maxWidth: 1024,
       maxHeight: 1024,
     });
-    
+
     if (result.assets) {
       for (const asset of result.assets) {
         if (asset.uri) await uploadAndSavePhoto(asset.uri);
       }
     }
   };
+
   const requestCameraPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -133,18 +219,16 @@ export default function ProfileScreen() {
             buttonNeutral: 'Ask Me Later',
             buttonNegative: 'Cancel',
             buttonPositive: 'OK',
-          }
+          },
         );
-        
+
         if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-          console.log('Camera permission granted');
           return true;
         } else {
-          console.log('Camera permission denied');
           Alert.alert(
             'Permission Required',
             'Camera access is required to take photos. Please enable it in your device settings.',
-            [{ text: 'OK' }]
+            [{ text: 'OK' }],
           );
           return false;
         }
@@ -153,18 +237,14 @@ export default function ProfileScreen() {
         return false;
       }
     }
-    return true; // iOS permissions are handled automatically by react-native-image-picker
+    return true;
   };
+
   const handleCapturePhoto = async () => {
-    console.log('Launching camera...');
-    
-    // Request permission first
     const hasPermission = await requestCameraPermission();
-    if (!hasPermission) {
-      return;
-    }
-    
-    const result = await launchCamera({ 
+    if (!hasPermission) return;
+
+    const result = await launchCamera({
       mediaType: 'photo',
       quality: 0.8,
       maxWidth: 1024,
@@ -173,59 +253,57 @@ export default function ProfileScreen() {
       includeBase64: false,
       saveToPhotos: true,
     });
-    
-    // Handle user cancellation or errors
-    if (result.didCancel) {
-      console.log('User cancelled camera');
-      return;
-    }
-    
-    if (result.errorMessage) {
-      console.log('Camera error:', result.errorMessage);
-      Alert.alert('Camera Error', result.errorMessage);
-      return;
-    }
-    
+
+    if (result.didCancel || result.errorMessage) return;
+
     if (result.assets && result.assets[0]?.uri) {
-      console.log('Photo captured successfully:', result.assets[0].uri);
       await uploadAndSavePhoto(result.assets[0].uri);
     }
   };
+
   const handleDeletePhoto = async (photoURL: string) => {
     Alert.alert(
       '🗑️ Delete Photo',
       'Are you sure you want to delete this photo?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
+        {
+          text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             try {
               const ref = storage().refFromURL(photoURL);
               await ref.delete();
-
-              await firestore().collection('users').doc(user?.uid).update({
-                photos: firestore.FieldValue.arrayRemove(photoURL),
-              });
-              
+              await firestore()
+                .collection('users')
+                .doc(user?.uid)
+                .update({
+                  photos: firestore.FieldValue.arrayRemove(photoURL),
+                });
               Alert.alert('✅ Success!', 'Photo deleted successfully!');
             } catch (err) {
               console.error('Delete error:', err);
-              Alert.alert('❌ Delete Failed', 'Could not delete the photo. Please try again.');
+              Alert.alert(
+                '❌ Delete Failed',
+                'Could not delete the photo. Please try again.',
+              );
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
   const handleWatchAd = () => {
-    if (loaded) {
-      rewarded.show();
-    } else {
+    if (adLoaded) {
+      rewardedAd.show();
+    } else if (adLoading) {
       Alert.alert('⏳ Please wait', 'Ad is still loading...');
-      rewarded.load();
+    } else {
+      Alert.alert('😔 No ads available', 'Please try again in a moment.');
+      // Try to reload the ad
+      rewardedAd.load();
+      setAdLoading(true);
     }
   };
 
@@ -233,30 +311,50 @@ export default function ProfileScreen() {
     setSelectedPhoto(photoURL);
     setShowImageModal(true);
   };
+
   const handleLogout = () => {
-    Alert.alert(
-      '🚪 Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Logout', 
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await GoogleSignin.signOut();  // disconnect from Google
-      await auth().signOut();        // sign out from Firebase
-              logout();
-              Alert.alert('👋 Goodbye!', 'You have been logged out successfully.');
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('❌ Error', 'Failed to logout. Please try again.');
-            }
+    Alert.alert('🚪 Logout', 'Are you sure you want to logout?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Logout',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await GoogleSignin.signOut();
+            await auth().signOut();
+            logout();
+            Alert.alert(
+              '👋 Goodbye!',
+              'You have been logged out successfully.',
+            );
+          } catch (error) {
+            console.error('Logout error:', error);
+            Alert.alert('❌ Error', 'Failed to logout. Please try again.');
           }
-        }
-      ]
-    );
+        },
+      },
+    ]);
   };
+
+  const renderCoinPackage = ({ item }) => (
+    <TouchableOpacity
+      style={[styles.packageCard, item.popular && styles.popularPackage]}
+      onPress={() => initiateMpesaPayment(item)}
+      disabled={processingPayment}
+    >
+      {item.popular && (
+        <View style={styles.popularBadge}>
+          <Text style={styles.popularText}>POPULAR</Text>
+        </View>
+      )}
+      <Text style={styles.packageCoins}>{item.coins}</Text>
+      <Text style={styles.packageCoinsLabel}>Coins</Text>
+      <Text style={styles.packagePrice}>KES {item.price}</Text>
+      <Text style={styles.packageValue}>
+        {((item.coins / item.price) * 100).toFixed(0)} coins/KES
+      </Text>
+    </TouchableOpacity>
+  );
 
   if (!user) {
     return (
@@ -270,16 +368,21 @@ export default function ProfileScreen() {
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Header Section */}
       <View style={styles.headerSection}>
-        <Text style={styles.header}>Your Profile</Text>
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutButtonText}>🚪 Logout</Text>
+        <View style={styles.headerTop}>
+          <Text style={styles.header}>Profile</Text>
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+            <Text style={styles.logoutButtonText}>Logout</Text>
           </TouchableOpacity>
+        </View>
+
         <View style={styles.profileCard}>
-          <Image 
-            source={{ uri: user.photoURL || 'https://via.placeholder.com/100' }} 
-            style={styles.avatar} 
+          <Image
+            source={{ uri: user.photoURL || 'https://via.placeholder.com/80' }}
+            style={styles.avatar}
           />
-          <Text style={styles.name}>{user.displayName || user.name || 'User'}</Text>
+          <Text style={styles.name}>
+            {user.displayName || user.name || 'User'}
+          </Text>
           <Text style={styles.email}>{user.email}</Text>
         </View>
       </View>
@@ -287,39 +390,64 @@ export default function ProfileScreen() {
       {/* Coins Section */}
       <View style={styles.coinsSection}>
         <View style={styles.coinsCard}>
-          <Text style={styles.coinsIcon}>💰</Text>
-          <View style={styles.coinsInfo}>
-            <Text style={styles.coinsLabel}>Your Coins</Text>
-            <Text style={styles.coinsValue}>{coins}</Text>
+          <View style={styles.coinsHeader}>
+            <Text style={styles.coinsIcon}>💰</Text>
+            <View style={styles.coinsInfo}>
+              <Text style={styles.coinsLabel}>Your Balance</Text>
+              <Text style={styles.coinsValue}>{coins.toLocaleString()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.coinsActions}>
+            <TouchableOpacity
+              style={[styles.coinActionButton, styles.buyCoinsButton]}
+              onPress={() => setShowCoinModal(true)}
+            >
+              <Text style={styles.coinActionText}>💳 Buy Coins</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.coinActionButton,
+                styles.adButton,
+                (!adLoaded || adLoading) && styles.adButtonDisabled,
+              ]}
+              onPress={handleWatchAd}
+              disabled={!adLoaded || adLoading}
+            >
+              <Text style={styles.coinActionText}>
+                {adLoading
+                  ? '⏳ Loading...'
+                  : adLoaded
+                  ? '📺 Watch Ad'
+                  : '❌ Try Again'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
-        <TouchableOpacity 
-          style={[styles.adButton, !loaded && styles.adButtonDisabled]} 
-          onPress={handleWatchAd}
-          disabled={!loaded}
-        >
-          <Text style={styles.adButtonText}>
-            {loaded ? '📺 Watch Ad to Earn Coins' : '⏳ Loading Ad...'}
-          </Text>
-        </TouchableOpacity>
       </View>
 
       {/* Photos Section */}
       <View style={styles.photosSection}>
         <Text style={styles.sectionTitle}>Photo Gallery</Text>
-        
-        {/* Action Buttons */}
+
         <View style={styles.actionButtons}>
-          <TouchableOpacity 
-            style={[styles.actionButton, uploading && styles.actionButtonDisabled]} 
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              uploading && styles.actionButtonDisabled,
+            ]}
             onPress={handleAddFromGallery}
             disabled={uploading}
           >
             <Text style={styles.actionButtonText}>📱 Gallery</Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, uploading && styles.actionButtonDisabled]} 
+
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              uploading && styles.actionButtonDisabled,
+            ]}
             onPress={handleCapturePhoto}
             disabled={uploading}
           >
@@ -327,15 +455,13 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Upload Progress */}
         {uploading && (
           <View style={styles.uploadingContainer}>
             <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.uploadingText}>Uploading photo...</Text>
+            <Text style={styles.uploadingText}>Uploading...</Text>
           </View>
         )}
 
-        {/* Photos Grid */}
         {photos.length > 0 ? (
           <FlatList
             data={photos}
@@ -347,8 +473,8 @@ export default function ProfileScreen() {
                 <TouchableOpacity onPress={() => handlePhotoPress(item)}>
                   <Image source={{ uri: item }} style={styles.photo} />
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={styles.deleteButton} 
+                <TouchableOpacity
+                  style={styles.deleteButton}
                   onPress={() => handleDeletePhoto(item)}
                 >
                   <Text style={styles.deleteText}>🗑️</Text>
@@ -360,10 +486,50 @@ export default function ProfileScreen() {
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateIcon}>📸</Text>
             <Text style={styles.emptyStateText}>No photos yet</Text>
-            <Text style={styles.emptyStateSubtext}>Add your first photo using the buttons above</Text>
+            <Text style={styles.emptyStateSubtext}>
+              Add your first photo using the buttons above
+            </Text>
           </View>
         )}
       </View>
+
+      {/* Coin Purchase Modal */}
+      <Modal
+        visible={showCoinModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowCoinModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.coinModalContent}>
+            <View style={styles.coinModalHeader}>
+              <Text style={styles.coinModalTitle}>Buy Coins</Text>
+              <TouchableOpacity onPress={() => setShowCoinModal(false)}>
+                <Text style={styles.closeButton}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.coinModalSubtitle}>
+              Choose a coin package to purchase with M-Pesa
+            </Text>
+
+            <FlatList
+              data={COIN_PACKAGES}
+              numColumns={2}
+              keyExtractor={item => item.id.toString()}
+              renderItem={renderCoinPackage}
+              contentContainerStyle={styles.packagesGrid}
+            />
+
+            {processingPayment && (
+              <View style={styles.processingContainer}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={styles.processingText}>Processing payment...</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* Image Modal */}
       <Modal
@@ -373,16 +539,19 @@ export default function ProfileScreen() {
         onRequestClose={() => setShowImageModal(false)}
       >
         <View style={styles.modalContainer}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.modalBackground}
             onPress={() => setShowImageModal(false)}
           >
             <View style={styles.modalContent}>
               {selectedPhoto && (
-                <Image source={{ uri: selectedPhoto }} style={styles.modalImage} />
+                <Image
+                  source={{ uri: selectedPhoto }}
+                  style={styles.modalImage}
+                />
               )}
-              <TouchableOpacity 
-                style={styles.closeButton}
+              <TouchableOpacity
+                style={styles.imageCloseButton}
                 onPress={() => setShowImageModal(false)}
               >
                 <Text style={styles.closeButtonText}>✕</Text>
@@ -398,215 +567,219 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background || '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   headerSection: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  headerTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
   },
   header: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: Colors.primary || '#333',
-    textAlign: 'center',
-    marginBottom: 20,
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1a1a1a',
   },
   logoutButton: {
-    backgroundColor: '#FF6B6B',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: '#ff4757',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  logoutButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '500',
   },
   profileCard: {
     backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 20,
+    borderRadius: 16,
+    padding: 16,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 3,
   },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    marginBottom: 16,
-    borderWidth: 4,
-    borderColor: Colors.primary || '#ddd',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: '#e9ecef',
   },
   name: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: Colors.primary || '#333',
-    marginBottom: 8,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 4,
   },
   email: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 10,
+    fontSize: 14,
+    color: '#6c757d',
   },
   coinsSection: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   coinsCard: {
     backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 15,
+    borderRadius: 16,
+    padding: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
-    elevation: 5,
+    elevation: 3,
+  },
+  coinsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
   },
   coinsIcon: {
-    fontSize: 40,
-    marginRight: 15,
+    fontSize: 32,
+    marginRight: 12,
   },
   coinsInfo: {
     flex: 1,
   },
   coinsLabel: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 5,
+    fontSize: 14,
+    color: '#6c757d',
+    marginBottom: 4,
   },
   coinsValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: Colors.success || '#4CAF50',
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#28a745',
+  },
+  coinsActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  coinActionButton: {
+    flex: 0.48,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  buyCoinsButton: {
+    backgroundColor: '#007bff',
   },
   adButton: {
-    backgroundColor: '#FF4B7B',
-    borderRadius: 15,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 5,
+    backgroundColor: '#17a2b8',
   },
   adButtonDisabled: {
-    backgroundColor: '#ccc',
+    backgroundColor: '#6c757d',
   },
-  adButtonText: {
+  coinActionText: {
     color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '600',
   },
   photosSection: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
   },
   sectionTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: Colors.primary || '#333',
-    marginBottom: 15,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 12,
   },
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   actionButton: {
-    backgroundColor: Colors.primary || '#007AFF',
-    borderRadius: 15,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
+    backgroundColor: '#6c5ce7',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     flex: 0.48,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 5,
   },
   actionButtonDisabled: {
-    backgroundColor: '#ccc',
+    backgroundColor: '#ddd',
   },
   actionButtonText: {
     color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '600',
   },
   uploadingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 15,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 10,
-    marginBottom: 15,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    marginBottom: 12,
   },
   uploadingText: {
-    marginLeft: 10,
-    fontSize: 16,
-    color: '#666',
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#6c757d',
   },
   photoGrid: {
-    paddingBottom: 20,
+    paddingBottom: 16,
   },
   photoItem: {
     flex: 0.5,
-    margin: 5,
+    margin: 4,
     backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 10,
+    borderRadius: 12,
+    padding: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowRadius: 4,
+    elevation: 2,
   },
   photo: {
     width: '100%',
-    height: 150,
-    borderRadius: 10,
-    marginBottom: 10,
+    height: 120,
+    borderRadius: 8,
+    marginBottom: 8,
   },
   deleteButton: {
     alignItems: 'center',
-    paddingVertical: 5,
+    paddingVertical: 4,
   },
   deleteText: {
-    fontSize: 20,
+    fontSize: 16,
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 40,
+    paddingVertical: 32,
   },
   emptyStateIcon: {
-    fontSize: 60,
-    marginBottom: 15,
+    fontSize: 48,
+    marginBottom: 12,
   },
   emptyStateText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 5,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6c757d',
+    marginBottom: 4,
   },
   emptyStateSubtext: {
     fontSize: 14,
-    color: '#999',
+    color: '#adb5bd',
     textAlign: 'center',
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -623,33 +796,123 @@ const styles = StyleSheet.create({
   modalImage: {
     width: screenWidth - 40,
     height: screenWidth - 40,
-    borderRadius: 10,
+    borderRadius: 16,
   },
-  closeButton: {
+  imageCloseButton: {
     position: 'absolute',
     top: 10,
     right: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     borderRadius: 20,
-    width: 40,
-    height: 40,
+    width: 32,
+    height: 32,
     justifyContent: 'center',
     alignItems: 'center',
   },
   closeButtonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
+  },
+  coinModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 20,
+    width: screenWidth - 40,
+    maxHeight: '80%',
+  },
+  coinModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  coinModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#2c3e50',
+  },
+  closeButton: {
+    fontSize: 20,
+    color: '#6c757d',
+    fontWeight: 'bold',
+  },
+  coinModalSubtitle: {
+    fontSize: 14,
+    color: '#6c757d',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  packagesGrid: {
+    paddingBottom: 16,
+  },
+  packageCard: {
+    flex: 0.48,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 16,
+    padding: 16,
+    margin: 4,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#e9ecef',
+    position: 'relative',
+  },
+  popularPackage: {
+    borderColor: '#ffc107',
+    backgroundColor: '#fff8e1',
+  },
+  popularBadge: {
+    position: 'absolute',
+    top: -8,
+    backgroundColor: '#ffc107',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  popularText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#212529',
+  },
+  packageCoins: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#28a745',
+    marginBottom: 4,
+  },
+  packageCoinsLabel: {
+    fontSize: 12,
+    color: '#6c757d',
+    marginBottom: 8,
+  },
+  packagePrice: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 4,
+  },
+  packageValue: {
+    fontSize: 10,
+    color: '#6c757d',
+  },
+  processingContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  processingText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6c757d',
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.background || '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   errorText: {
-    fontSize: 18,
-    color: 'red',
+    fontSize: 16,
+    color: '#dc3545',
     textAlign: 'center',
   },
 });
